@@ -31,7 +31,6 @@ class Storage:
     def __init__(self, path, timeout=5.0):
         self.path = str(path)
         self.lock = threading.RLock()
-        self.read_lock = threading.RLock()
         self.closed = False
         self.connection = sqlite3.connect(self.path, timeout=timeout, isolation_level=None, check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
@@ -73,7 +72,14 @@ class Storage:
 
     @contextlib.contextmanager
     def read(self):
-        with self.read_lock:
+        # Reads and writes share this handle's single connection, so a read
+        # must hold the same lock as a write: otherwise its statements would
+        # interleave with an open write transaction on the connection, either
+        # joining it and exposing uncommitted versions/index rows, or making
+        # the writer's BEGIN IMMEDIATE fail inside the read's transaction.
+        # The lock is reentrant, so a read nested in atomic() on the same
+        # thread still joins the outer transaction.
+        with self.lock:
             if self.closed:
                 raise DatabaseError("database handle is closed")
             owns_transaction = not self.connection.in_transaction
